@@ -5,8 +5,12 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue';
-import type { Signature, Stroke, Point } from '../utils/signature';
+import { ref, onMounted, onBeforeUnmount, nextTick, defineExpose } from 'vue';
+
+// Local types (deprecated file src/utils/signature.ts removed from type dependency)
+export type Point = { x: number; y: number; t?: number; p?: number };
+export type Stroke = Point[];
+export type Signature = Stroke[];
 
 const { width, height, strokeColor, strokeWidth } = defineProps({
   width: { type: Number, default: 700 },
@@ -38,7 +42,6 @@ function getPos(e: PointerEvent) {
 
 function resizeCanvas() {
   const canvas = canvasRef.value!;
-  // set internal resolution using devicePixelRatio
   canvas.width = Math.floor(width * dpr);
   canvas.height = Math.floor(height * dpr);
   canvas.style.width = width + 'px';
@@ -52,7 +55,6 @@ function resizeCanvas() {
 function clearDrawingSurface() {
   if (!ctx) return;
   ctx.clearRect(0, 0, width, height);
-  ctx.fillStyle = 'transparent';
 }
 
 function drawPoint(p: Point) {
@@ -64,7 +66,7 @@ function drawPoint(p: Point) {
 }
 
 function drawLine(a: Point, b: Point) {
-  if (!ctx) return;
+  if (!ctx || !a || !b) return;
   ctx.strokeStyle = strokeColor as string;
   ctx.lineWidth = strokeWidth as number;
   ctx.lineCap = 'round';
@@ -76,7 +78,7 @@ function drawLine(a: Point, b: Point) {
 
 function onPointerDown(e: PointerEvent) {
   if (!canvasRef.value) return;
-  (e.target as Element).setPointerCapture(e.pointerId);
+  try { (e.target as Element).setPointerCapture(e.pointerId); } catch {}
   drawing = true;
   currentStroke = [];
   const pos = getPos(e);
@@ -90,15 +92,20 @@ function onPointerMove(e: PointerEvent) {
   const pos = getPos(e);
   const p: Point = { x: pos.x, y: pos.y, t: Date.now(), p: (e as any).pressure ?? 0.5 };
   const prev = currentStroke[currentStroke.length - 1];
-  currentStroke.push(p);
-  drawLine(prev, p);
+  if (prev) {
+    currentStroke.push(p);
+    drawLine(prev, p);
+  } else {
+    currentStroke.push(p);
+    drawPoint(p);
+  }
 }
 
 function onPointerUp(e: PointerEvent) {
   if (!drawing) return;
   drawing = false;
   try { (e.target as Element).releasePointerCapture(e.pointerId); } catch (err) {}
-  strokes.value.push(currentStroke.slice());
+  if (currentStroke.length) strokes.value.push(currentStroke.slice());
 }
 
 function clear() {
@@ -108,7 +115,7 @@ function clear() {
 }
 
 function getSignature(): Signature {
-  return JSON.parse(JSON.stringify(strokes.value)); // deep copy
+  return JSON.parse(JSON.stringify(strokes.value));
 }
 
 function getDataURL(type = 'image/png', quality?: any): string {
@@ -121,7 +128,7 @@ onMounted(() => {
     if (!canvasRef.value) return;
     resizeCanvas();
     window.addEventListener('resize', resizeCanvas);
-    const c = canvasRef.value;
+    const c = canvasRef.value!;
     c.addEventListener('pointerdown', onPointerDown);
     c.addEventListener('pointermove', onPointerMove);
     c.addEventListener('pointerup', onPointerUp);
