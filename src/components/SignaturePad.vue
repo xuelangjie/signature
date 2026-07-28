@@ -5,7 +5,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, nextTick, defineExpose } from 'vue';
+import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue';
 import type { Signature, Stroke, Point } from '../utils/signature';
 
 const { width, height, strokeColor, strokeWidth } = defineProps({
