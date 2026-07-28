@@ -3,7 +3,7 @@ import { createWorker } from 'tesseract.js';
 export function normalizeText(s: string) {
   return s
     .normalize('NFD')
-    .replace(/[00-\u036f]/g, '')
+    .replace(/\u0300-\u036f/g, '')
     .toLowerCase()
     .replace(/[^a-z0-9\u4e00-\u9fff]/g, '')
     .trim();
@@ -37,24 +37,42 @@ export function similarity(a: string, b: string): number {
 export async function recognizeBlob(blob: Blob, lang: string = 'eng', onProgress?: (p: number) => void): Promise<{ text: string }> {
   const worker = createWorker({
     logger: (m: any) => {
-      if (m && m.status === 'recognizing text' && typeof m.progress === 'number') {
+      // forward progress for relevant statuses
+      if (m && typeof m.progress === 'number') {
         onProgress && onProgress(m.progress);
       }
+      // also log to console for debugging
+      // console.log('Tesseract:', m);
     }
   });
-  await worker.load();
-  // load language; Tesseract will fetch language file from CDN, may take time
+
   try {
-    await worker.loadLanguage(lang);
-    await worker.initialize(lang);
-  } catch (err) {
-    // if language load fails, fallback to eng
-    if (lang !== 'eng') {
-      await worker.loadLanguage('eng');
-      await worker.initialize('eng');
+    await worker.load();
+    // load language; Tesseract will fetch language file from CDN, may take time
+    try {
+      await worker.loadLanguage(lang);
+      await worker.initialize(lang);
+    } catch (err: any) {
+      console.warn(`Failed to load language ${lang}:`, err?.message || err);
+      if (lang !== 'eng') {
+        try {
+          await worker.loadLanguage('eng');
+          await worker.initialize('eng');
+        } catch (err2: any) {
+          throw new Error(`Failed to initialize Tesseract languages: ${err2?.message || err2}`);
+        }
+      } else {
+        throw new Error(`Failed to initialize Tesseract language eng: ${err?.message || err}`);
+      }
     }
+
+    const { data } = await worker.recognize(blob);
+    await worker.terminate();
+    return { text: data.text };
+  } catch (err: any) {
+    try { await worker.terminate(); } catch (_) {}
+    // throw a clearer error for the caller to display
+    const msg = err?.message ? String(err.message) : String(err);
+    throw new Error(`Tesseract recognition failed: ${msg}`);
   }
-  const { data } = await worker.recognize(blob);
-  await worker.terminate();
-  return { text: data.text };
 }
