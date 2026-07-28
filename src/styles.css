@@ -1,0 +1,16 @@
+* { box-sizing: border-box; }
+html,body,#app { height: 100%; margin: 0; font-family: Arial, Helvetica, sans-serif; }
+.app {
+  max-width: 900px;
+  margin: 12px auto;
+  padding: 12px;
+}
+.controls { display:flex; gap:8px; flex-wrap:wrap; margin-top:8px; }
+.btn { padding:8px 12px; border-radius:6px; border:1px solid #888; background:white; cursor:pointer; }
+.btn.primary { background:#2b8bf2; color:white; border-color:#1670d4; }
+.info { margin-top:8px; color:#333; }
+.canvas-wrap { border:1px solid #ddd; border-radius:6px; overflow:hidden; touch-action: none; }
+.footer { margin-top:12px; color:#666; font-size:13px; }
+@media (max-width: 600px) {
+  .app { padding:8px; margin: 6px; }
+}
