@@ -5,7 +5,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onBeforeUnmount, nextTick, defineExpose } from 'vue';
+import { ref, onMounted, onBeforeUnmount, nextTick } from 'vue';
 
 // Local types (deprecated file src/utils/signature.ts removed from type dependency)
 export type Point = { x: number; y: number; t?: number; p?: number };
@@ -123,6 +123,17 @@ function getDataURL(type = 'image/png', quality?: any): string {
   return canvas.toDataURL(type, quality);
 }
 
+function getBlob(type = 'image/png', quality?: any): Promise<Blob> {
+  return new Promise((resolve, reject) => {
+    const canvas = canvasRef.value;
+    if (!canvas) return reject(new Error('canvas not ready'));
+    canvas.toBlob((b) => {
+      if (!b) return reject(new Error('toBlob returned null'));
+      resolve(b);
+    }, type, quality);
+  });
+}
+
 onMounted(() => {
   nextTick(() => {
     if (!canvasRef.value) return;
@@ -149,7 +160,7 @@ onBeforeUnmount(() => {
   window.removeEventListener('resize', resizeCanvas);
 });
 
-defineExpose({ clear, getSignature, getDataURL });
+defineExpose({ clear, getSignature, getDataURL, getBlob });
 </script>
 
 <style scoped>
