@@ -8,14 +8,17 @@
 import { ref, onMounted, onBeforeUnmount, nextTick, defineExpose } from 'vue';
 import type { Signature, Stroke, Point } from '../utils/signature';
 
-const props = {
+const { width, height, strokeColor, strokeWidth } = defineProps({
   width: { type: Number, default: 700 },
   height: { type: Number, default: 240 },
   strokeColor: { type: String, default: '#000' },
   strokeWidth: { type: Number, default: 2 }
+} as const) as {
+  width: number;
+  height: number;
+  strokeColor: string;
+  strokeWidth: number;
 };
-
-const { width, height, strokeColor, strokeWidth } = (props as any);
 
 const canvasRef = ref<HTMLCanvasElement | null>(null);
 let ctx: CanvasRenderingContext2D | null = null;
