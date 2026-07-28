@@ -3,7 +3,7 @@ import { createWorker } from 'tesseract.js';
 export function normalizeText(s: string) {
   return s
     .normalize('NFD')
-    .replace(/\u0300-\u036f/g, '')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
     .replace(/[^a-z0-9\u4e00-\u9fff]/g, '')
     .trim();
@@ -33,21 +33,15 @@ export function similarity(a: string, b: string): number {
   return 1 - d / maxLen;
 }
 
-// recognizeBlob: wraps Tesseract.js recognition and reports progress 0..1
+// recognizeBlob: wraps Tesseract.js recognition and reports coarse progress 0..1
 export async function recognizeBlob(blob: Blob, lang: string = 'eng', onProgress?: (p: number) => void): Promise<{ text: string }> {
-  const worker = createWorker({
-    logger: (m: any) => {
-      // forward progress for relevant statuses
-      if (m && typeof m.progress === 'number') {
-        onProgress && onProgress(m.progress);
-      }
-      // also log to console for debugging
-      // console.log('Tesseract:', m);
-    }
-  });
+  // Do NOT pass a function in createWorker options (it may be posted to the worker and cause DataCloneError).
+  const worker = createWorker();
 
   try {
     await worker.load();
+    onProgress && onProgress(0.2);
+
     // load language; Tesseract will fetch language file from CDN, may take time
     try {
       await worker.loadLanguage(lang);
@@ -66,12 +60,14 @@ export async function recognizeBlob(blob: Blob, lang: string = 'eng', onProgress
       }
     }
 
+    onProgress && onProgress(0.6);
     const { data } = await worker.recognize(blob);
+    onProgress && onProgress(1);
+
     await worker.terminate();
     return { text: data.text };
   } catch (err: any) {
     try { await worker.terminate(); } catch (_) {}
-    // throw a clearer error for the caller to display
     const msg = err?.message ? String(err.message) : String(err);
     throw new Error(`Tesseract recognition failed: ${msg}`);
   }
