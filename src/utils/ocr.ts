@@ -1,5 +1,5 @@
 // src/utils/ocr.ts
-// OCR utilities: normalizeText, levenshtein/similarity, and recognizeBlob using dynamic import of tesseract.js
+// OCR utilities: normalizeText, levenshtein/similarity, and a robust recognizeBlob
 
 export const normalizeText = (s: string) => {
   if (!s) return '';
@@ -35,56 +35,130 @@ export const similarity = (a: string, b: string): number => {
   return 1 - d / maxLen;
 };
 
+// Robust recognizeBlob: supports multiple tesseract.js builds and worker shapes
 export async function recognizeBlob(blob: Blob, lang: string = 'eng', onProgress?: (p: number) => void): Promise<{ text: string }> {
-  // Dynamically import to avoid packaging issues where createWorker isn't found at module init.
-  const TesseractMod = await import('tesseract.js');
-  // prefer named export, fallback to default.createWorker or default itself
-  const createWorkerCandidate = (TesseractMod as any).createWorker
-    || ((TesseractMod as any).default && (TesseractMod as any).default.createWorker)
-    || ((TesseractMod as any).default && typeof (TesseractMod as any).default === 'function' ? (TesseractMod as any).default : null);
-
-  if (!createWorkerCandidate) {
-    throw new Error('Tesseract.createWorker() not found after dynamic import. Ensure tesseract.js is installed (try npm install tesseract.js@^4.2.1)');
-  }
-
-  const createWorker = createWorkerCandidate;
-  let maybeWorker = createWorker();
-  const worker = maybeWorker instanceof Promise ? await maybeWorker : maybeWorker;
-
-  // debug
-  console.debug('DEBUG: maybeWorker', maybeWorker, 'worker', worker);
-
-  if (!worker || typeof worker.load !== 'function') {
-    console.error('DEBUG: unexpected worker object:', worker);
-    throw new Error('Unexpected Tesseract worker object — worker.load not a function. Check tesseract.js version/import.');
-  }
-
+  // dynamic import to avoid packaging interop issues
+  let TesseractMod: any;
   try {
-    await worker.load();
-    onProgress && onProgress(0.2);
+    TesseractMod = await import('tesseract.js');
+  } catch (err) {
+    console.warn('Failed to dynamic import tesseract.js:', err);
+    // Try window fallback
+    TesseractMod = (window as any).Tesseract ? (window as any) : null;
+  }
 
+  const T = (TesseractMod && (TesseractMod.default || TesseractMod)) || (window as any).Tesseract || null;
+  if (!T) {
+    throw new Error('tesseract.js not available. Install tesseract.js@^4.2.1 or include the CDN build.');
+  }
+
+  // logger for high-level recognize; DO NOT pass logger into worker factory (not cloneable)
+  const logger = (m: any) => {
+    if (m && typeof m.progress === 'number') {
+      onProgress && onProgress(m.progress);
+    }
+  };
+
+  // Candidates to obtain a worker or worker-like object
+  const candidates: Array<any> = [
+    (T as any).createWorker,
+    (T as any).default && (T as any).default.createWorker,
+    typeof T === 'function' ? T : null,
+    T,
+  ];
+
+  let workerFactory: any = null;
+  for (const c of candidates) {
+    if (!c) continue;
+    // If c itself is a factory function that when called produces a worker, pick it
+    if (typeof c === 'function') {
+      workerFactory = c;
+      break;
+    }
+    // If c is an object with createWorker, pick that method
+    if (typeof c === 'object' && typeof c.createWorker === 'function') {
+      workerFactory = () => c.createWorker();
+      break;
+    }
+  }
+
+  // If no factory, try high-level recognize directly
+  const highLevelRecognize = (T as any).recognize || (TesseractMod as any)?.recognize || null;
+
+  if (!workerFactory && !highLevelRecognize) {
+    throw new Error('No tesseract createWorker factory or recognize function found on module.');
+  }
+
+  // Try worker-style flow if we have a factory
+  if (workerFactory) {
+    let maybeWorker: any;
     try {
-      await worker.loadLanguage(lang);
-      await worker.initialize(lang);
-    } catch (err: any) {
-      console.warn(`Failed to load language ${lang}:`, err?.message || err);
-      if (lang !== 'eng') {
-        await worker.loadLanguage('eng');
-        await worker.initialize('eng');
-      } else {
-        throw new Error(`Failed to initialize Tesseract language eng: ${err?.message || err}`);
+      maybeWorker = workerFactory();
+    } catch (e) {
+      // some factories may still return a Promise, attempt to call and await
+      maybeWorker = workerFactory();
+    }
+
+    const worker = maybeWorker instanceof Promise ? await maybeWorker : maybeWorker;
+    console.debug('DEBUG: createWorker returned', maybeWorker, '=> worker', worker);
+
+    // If worker has classic API
+    if (worker && typeof worker.load === 'function' && typeof worker.loadLanguage === 'function' && typeof worker.initialize === 'function') {
+      try {
+        await worker.load();
+        onProgress && onProgress(0.2);
+
+        try {
+          await worker.loadLanguage(lang);
+          await worker.initialize(lang);
+        } catch (err: any) {
+          console.warn('language load/init failed:', err?.message || err);
+          if (lang !== 'eng') {
+            await worker.loadLanguage('eng');
+            await worker.initialize('eng');
+          } else {
+            throw err;
+          }
+        }
+
+        onProgress && onProgress(0.6);
+        const { data } = await worker.recognize(blob);
+        onProgress && onProgress(1);
+        await worker.terminate();
+        return { text: data?.text ?? '' };
+      } catch (err: any) {
+        try { if (worker.terminate) await worker.terminate(); } catch (_e) {}
+        console.error('Worker API error:', err);
+        throw new Error(`Tesseract worker recognition failed: ${err?.message || String(err)}`);
       }
     }
 
-    onProgress && onProgress(0.6);
-    const { data } = await worker.recognize(blob);
-    onProgress && onProgress(1);
-
-    await worker.terminate();
-    return { text: data.text };
-  } catch (err: any) {
-    try { await worker.terminate(); } catch (_) {}
-    const msg = err?.message ? String(err.message) : String(err);
-    throw new Error(`Tesseract recognition failed: ${msg}`);
+    // If worker only exposes recognize (some builds), use it
+    if (worker && typeof worker.recognize === 'function') {
+      try {
+        const res = await worker.recognize(blob, { logger });
+        const text = res?.data?.text ?? res?.text ?? res ?? '';
+        try { if (worker.terminate) await worker.terminate(); } catch (_e) {}
+        return { text: String(text) };
+      } catch (err: any) {
+        try { if (worker.terminate) await worker.terminate(); } catch (_e) {}
+        console.error('worker.recognize error:', err);
+        // fallthrough to high-level recognize
+      }
+    }
   }
+
+  // Fallback: high-level recognize API
+  if (typeof highLevelRecognize === 'function') {
+    try {
+      const res = await highLevelRecognize(blob, lang, { logger });
+      const text = res?.data?.text ?? res?.text ?? '';
+      return { text: String(text) };
+    } catch (err: any) {
+      console.error('high-level recognize error:', err);
+      throw new Error(`Tesseract recognition failed (fallback): ${err?.message || String(err)}`);
+    }
+  }
+
+  throw new Error('No suitable Tesseract API available to perform recognition.');
 }
