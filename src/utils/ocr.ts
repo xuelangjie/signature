@@ -1,12 +1,6 @@
-import * as TesseractNS from 'tesseract.js';
+// src/utils/ocr.ts
+// Use dynamic import for tesseract.js to avoid bundler/ESM/CJS interop issues.
 
-// Try to locate createWorker in various export layouts
-const createWorkerFn: (() => any) | null =
-  (TesseractNS as any).createWorker
-  || ((TesseractNS as any).default && (TesseractNS as any).default.createWorker)
-  || ((TesseractNS as any).default && typeof (TesseractNS as any).default === 'function' ? (TesseractNS as any).default : null);
-
-// normalizeText, levenshtein, similarity are always available
 export const normalizeText = (s: string) => {
   if (!s) return '';
   return s
@@ -41,48 +35,47 @@ export const similarity = (a: string, b: string): number => {
   return 1 - d / maxLen;
 };
 
-// recognizeBlob implementation — choose at runtime based on createWorker availability
-export let recognizeBlob: (blob: Blob, lang?: string, onProgress?: (p: number) => void) => Promise<{ text: string }>;
+export async function recognizeBlob(blob: Blob, lang: string = 'eng', onProgress?: (p: number) => void): Promise<{ text: string }> {
+  // Dynamically import to avoid packaging issues where createWorker isn't found at module init.
+  const TesseractMod = await import('tesseract.js');
+  // prefer named export, fallback to default.createWorker or default itself
+  const createWorkerCandidate = (TesseractMod as any).createWorker
+    || ((TesseractMod as any).default && (TesseractMod as any).default.createWorker)
+    || ((TesseractMod as any).default && typeof (TesseractMod as any).default === 'function' ? (TesseractMod as any).default : null);
 
-if (!createWorkerFn) {
-  recognizeBlob = async () => {
-    throw new Error(
-      'Tesseract.createWorker() not found. Possible causes: tesseract.js import failed or incompatible package version. ' +
-      "请确保已安装 tesseract.js@^4.2.1，并重启开发服务器。"
-    );
-  };
-} else {
-  const createWorker = createWorkerFn;
+  if (!createWorkerCandidate) {
+    throw new Error('Tesseract.createWorker() not found after dynamic import. Ensure tesseract.js is installed (try npm install tesseract.js@^4.2.1)');
+  }
 
-  recognizeBlob = async (blob: Blob, lang: string = 'eng', onProgress?: (p: number) => void) => {
-    const worker = createWorker();
+  const createWorker = createWorkerCandidate;
+  const worker = createWorker();
+
+  try {
+    await worker.load();
+    onProgress && onProgress(0.2);
+
     try {
-      await worker.load();
-      onProgress && onProgress(0.2);
-
-      try {
-        await worker.loadLanguage(lang);
-        await worker.initialize(lang);
-      } catch (err: any) {
-        console.warn(`Failed to load language ${lang}:`, err?.message || err);
-        if (lang !== 'eng') {
-          await worker.loadLanguage('eng');
-          await worker.initialize('eng');
-        } else {
-          throw new Error(`Failed to initialize Tesseract language eng: ${err?.message || err}`);
-        }
-      }
-
-      onProgress && onProgress(0.6);
-      const { data } = await worker.recognize(blob);
-      onProgress && onProgress(1);
-
-      await worker.terminate();
-      return { text: data.text };
+      await worker.loadLanguage(lang);
+      await worker.initialize(lang);
     } catch (err: any) {
-      try { await worker.terminate(); } catch (_) {}
-      const msg = err?.message ? String(err.message) : String(err);
-      throw new Error(`Tesseract recognition failed: ${msg}`);
+      console.warn(`Failed to load language ${lang}:`, err?.message || err);
+      if (lang !== 'eng') {
+        await worker.loadLanguage('eng');
+        await worker.initialize('eng');
+      } else {
+        throw new Error(`Failed to initialize Tesseract language eng: ${err?.message || err}`);
+      }
     }
-  };
+
+    onProgress && onProgress(0.6);
+    const { data } = await worker.recognize(blob);
+    onProgress && onProgress(1);
+
+    await worker.terminate();
+    return { text: data.text };
+  } catch (err: any) {
+    try { await worker.terminate(); } catch (_) {}
+    const msg = err?.message ? String(err.message) : String(err);
+    throw new Error(`Tesseract recognition failed: ${msg}`);
+  }
 }
