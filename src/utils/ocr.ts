@@ -136,14 +136,22 @@ export async function recognizeBlob(blob: Blob, lang: string = 'eng', onProgress
     // If worker only exposes recognize (some builds), use it
     if (worker && typeof worker.recognize === 'function') {
       try {
-        const res = await worker.recognize(blob, { logger });
+        // IMPORTANT: do NOT pass a function (logger) here — it may be cloned to the worker and cause DataCloneError.
+        const res = await worker.recognize(blob); // <-- no { logger } here
         const text = res?.data?.text ?? res?.text ?? res ?? '';
         try { if (worker.terminate) await worker.terminate(); } catch (_e) {}
         return { text: String(text) };
       } catch (err: any) {
         try { if (worker.terminate) await worker.terminate(); } catch (_e) {}
+        const msg = String(err?.message || err);
         console.error('worker.recognize error:', err);
-        // fallthrough to high-level recognize
+        if (msg.includes('DataCloneError') || msg.includes('postMessage')) {
+          console.warn('Detected DataCloneError when calling worker.recognize — falling back to high-level Tesseract.recognize()');
+          // fall through to high-level fallback
+        } else {
+          // not a clone error, rethrow
+          throw err;
+        }
       }
     }
   }
